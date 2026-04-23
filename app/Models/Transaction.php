@@ -8,14 +8,16 @@ class Transaction extends Model
 {
     protected $fillable = [
         'chat_id',
+        'type',
         'amount',
+        'base_amount_uzs',
         'category',
         'note',
-        'date',
+        'status',
     ];
 
     protected $casts = [
-        'date' => 'date',
         'amount' => 'decimal:2',
+        'base_amount_uzs' => 'decimal:2',
     ];
 }

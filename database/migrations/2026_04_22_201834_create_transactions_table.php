@@ -14,10 +14,12 @@ return new class extends Migration
         Schema::create('transactions', function (Blueprint $table) {
             $table->id();
             $table->bigInteger('chat_id');
-            $table->decimal('amount', 10, 2);
-            $table->string('category');
-            $table->text('note')->nullable();
-            $table->date('date');
+            $table->enum('type', ['expense', 'income', 'debt']);
+            $table->decimal('amount', 15, 2);
+            $table->decimal('base_amount_uzs', 15, 2);
+            $table->string('category')->nullable();
+            $table->string('note')->nullable();
+            $table->string('status')->default('pending'); // 'pending', 'paid' - for debts
             $table->timestamps();
         });
     }

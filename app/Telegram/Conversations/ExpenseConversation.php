@@ -3,6 +3,8 @@
 namespace App\Telegram\Conversations;
 
 use App\Models\Transaction;
+use App\Services\AiParserService;
+use App\Services\CurrencyService;
 use SergiX44\Nutgram\Conversations\Conversation;
 use SergiX44\Nutgram\Nutgram;
 use SergiX44\Nutgram\Telegram\Types\Keyboard\InlineKeyboardButton;
@@ -12,56 +14,87 @@ class ExpenseConversation extends Conversation
 {
     public ?float $amount = null;
     public ?string $category = null;
+    public ?string $type = 'expense';
+    public ?string $currency = 'UZS';
+    public ?string $note = null;
 
     public function start(Nutgram $bot)
     {
-        $bot->sendMessage('How much did you spend?');
-        $this->next('askCategory');
+        $bot->sendMessage('Enter your transaction (e.g., "Spent 50k for lunch" or "Received 1M salary"):');
+        $this->next('parseInput');
     }
 
-    public function askCategory(Nutgram $bot)
+    public function parseInput(Nutgram $bot)
     {
-        $this->amount = (float)$bot->message()?->text;
+        $text = $bot->message()?->text;
+        if (!$text) {
+            $bot->sendMessage('Please enter some text.');
+            return;
+        }
+
+        $parser = new AiParserService();
+        $parsed = $parser->parse($text);
+
+        $this->amount = $parsed['amount'];
+        $this->type = $parsed['type'];
+        $this->category = $parsed['category'];
+        $this->note = $parsed['note'];
+        $this->currency = $parsed['currency'];
 
         if ($this->amount <= 0) {
-            $bot->sendMessage('Please enter a valid amount:');
+            $bot->sendMessage('I couldn\'t detect the amount. Please enter it manually (e.g., 50000):');
+            $this->next('askAmountManually');
             return;
         }
 
-        $bot->sendMessage('Select a category:', [
-            'reply_markup' => InlineKeyboardMarkup::make()
-                ->addRow(
-                    InlineKeyboardButton::make('Food', callback_data: 'Food'),
-                    InlineKeyboardButton::make('Transport', callback_data: 'Transport')
-                )
-                ->addRow(
-                    InlineKeyboardButton::make('Bill', callback_data: 'Bill'),
-                    InlineKeyboardButton::make('Other', callback_data: 'Other')
-                )
-        ]);
+        if ($this->type === 'debt') {
+            $bot->sendMessage('Who is the lender/borrower?');
+            $this->next('askDebtPerson');
+            return;
+        }
 
-        $this->next('saveExpense');
+        $this->confirmAndSave($bot);
     }
 
-    public function saveExpense(Nutgram $bot)
+    public function askAmountManually(Nutgram $bot)
     {
-        if (!$bot->isCallbackQuery()) {
-            $bot->sendMessage('Please select a category from the buttons.');
+        $this->amount = (float)$bot->message()?->text;
+        if ($this->amount <= 0) {
+            $bot->sendMessage('Invalid amount. Try again:');
             return;
         }
+        
+        if ($this->type === 'debt') {
+            $bot->sendMessage('Who is the lender/borrower?');
+            $this->next('askDebtPerson');
+        } else {
+            $this->confirmAndSave($bot);
+        }
+    }
 
-        $this->category = $bot->callbackQuery()->data;
+    public function askDebtPerson(Nutgram $bot)
+    {
+        $person = $bot->message()?->text;
+        $this->note .= " (Person: $person)";
+        $this->confirmAndSave($bot);
+    }
+
+    public function confirmAndSave(Nutgram $bot)
+    {
+        $currencyService = new CurrencyService();
+        $baseAmountUzs = $currencyService->convertToUzs($this->amount, $this->currency);
 
         Transaction::create([
             'chat_id' => $bot->chatId(),
+            'type' => $this->type,
             'amount' => $this->amount,
+            'base_amount_uzs' => $baseAmountUzs,
             'category' => $this->category,
-            'date' => now(),
-            'note' => 'Added via Telegram Bot',
+            'note' => $this->note,
+            'status' => $this->type === 'debt' ? 'pending' : 'paid',
         ]);
 
-        $bot->answerCallbackQuery();
-        $bot->sendMessage("✅ Saved: {$this->amount} in {$this->category}");
+        $bot->sendMessage("✅ Saved {$this->type}: " . number_format($this->amount) . " {$this->currency} (" . number_format($baseAmountUzs) . " UZS)");
         $this->end();
     }
 }
